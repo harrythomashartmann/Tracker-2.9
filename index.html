@@ -55,10 +55,15 @@ video{width:100%;border-radius:10px;background:black;margin-bottom:10px}
 
 <button class="track-btn" onclick="saveRecord()">Add To Pending</button>
 <button class="backup-btn" onclick="exportBackup()">Export Backup</button>
+<button class="backup-btn" onclick="document.getElementById('excelFile').click()">Select Excel File</button>
+<button class="backup-btn" onclick="appendToExcel()">Append To Excel</button>
+<input type="file" id="excelFile" accept=".xlsx" style="display:none">
 <button class="backup-btn" onclick="document.getElementById('importFile').click()">Import Backup</button>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="importBackup(event)">
 <button class="clear-btn" onclick="clearAllData()">Clear Everything</button>
 </div>
+
+<div class="card"><h2>Export Status</h2><p id="exportStatus">No exports yet</p></div>
 
 <div class="card">
 <h2>Pending Records</h2>
@@ -91,11 +96,13 @@ video{width:100%;border-radius:10px;background:black;margin-bottom:10px}
 
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <script>
 let records = JSON.parse(localStorage.getItem("records")) || [];
 let pendingRecords = JSON.parse(localStorage.getItem("pendingRecords")) || [];
 let capturedPhoto = "";
 let stream = null;
+let lastExportTime = Number(localStorage.getItem("lastExportTime")) || 0;
 
 async function startCamera(){
  try{
@@ -139,6 +146,7 @@ function saveRecord(){
  const now=new Date();
 
  pendingRecords.unshift({
+   id: Date.now(),
    name:document.getElementById("name").value.trim(),
    routeCode:document.getElementById("routeCode").value.trim(),
    cart:document.getElementById("cart").value.trim(),
@@ -169,6 +177,70 @@ function exportBackup(){
  a.click();
 }
 
+
+async function appendToExcel(){
+
+ const file=document.getElementById("excelFile").files[0];
+
+ if(!file){
+   alert("Please select an Excel workbook.");
+   return;
+ }
+
+ const buffer=await file.arrayBuffer();
+ const workbook=XLSX.read(buffer,{type:"array"});
+
+ ["Database Records","Pending Records","Archive"].forEach(sheetName=>{
+   if(!workbook.Sheets[sheetName]){
+      workbook.Sheets[sheetName]=XLSX.utils.json_to_sheet([]);
+      workbook.SheetNames.push(sheetName);
+   }
+ });
+
+ const databaseSheet=XLSX.utils.sheet_to_json(workbook.Sheets["Database Records"]);
+ const pendingSheet=XLSX.utils.sheet_to_json(workbook.Sheets["Pending Records"]);
+
+ const exportedIds=new Set([
+   ...databaseSheet.map(r=>r.ID),
+   ...pendingSheet.map(r=>r.ID)
+ ]);
+
+ const newDatabaseRecords=records.filter(r=>!exportedIds.has(r.id));
+ const newPendingRecords=pendingRecords.filter(r=>!exportedIds.has(r.id));
+
+ workbook.Sheets["Database Records"]=XLSX.utils.json_to_sheet([
+   ...databaseSheet,
+   ...newDatabaseRecords.map(r=>({
+      ID:r.id,Name:r.name,RouteCode:r.routeCode,
+      Cart:r.cart,Feedback:r.feedback,DateAdded:r.date
+   }))
+ ]);
+
+ workbook.Sheets["Pending Records"]=XLSX.utils.json_to_sheet([
+   ...pendingSheet,
+   ...newPendingRecords.map(r=>({
+      ID:r.id,Name:r.name,RouteCode:r.routeCode,
+      Cart:r.cart,Feedback:r.feedback,DateAdded:r.date
+   }))
+ ]);
+
+ workbook.Sheets["Archive"]=XLSX.utils.json_to_sheet([{
+   ExportedAt:new Date().toLocaleString(),
+   DatabaseRecords:newDatabaseRecords.length,
+   PendingRecords:newPendingRecords.length
+ }]);
+
+ XLSX.writeFile(workbook,file.name.replace(".xlsx","")+"_updated.xlsx");
+
+ localStorage.setItem("lastExportTime",Date.now());
+
+ const el=document.getElementById("exportStatus");
+ if(el) el.innerText="Last Export: "+new Date().toLocaleString();
+
+ alert("Export complete.");
+}
+
+
 function importBackup(event){
  const file=event.target.files[0];
  if(!file) return;
@@ -177,8 +249,8 @@ function importBackup(event){
  reader.onload=function(e){
    try{
      const data=JSON.parse(e.target.result);
-     records=data.databaseRecords||[];
-     pendingRecords=data.pendingRecords||[];
+     records=(data.databaseRecords||[]).map(r=>({id:r.id||Date.now()+Math.random(),...r}));
+     pendingRecords=(data.pendingRecords||[]).map(r=>({id:r.id||Date.now()+Math.random(),...r}));
      localStorage.setItem("records",JSON.stringify(records));
      localStorage.setItem("pendingRecords",JSON.stringify(pendingRecords));
      loadData();
